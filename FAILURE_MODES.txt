@@ -1,0 +1,20 @@
+======================================================================
+FitFindr — Milestone 5: Triggered Failure Modes
+======================================================================
+
+[1] search_listings → zero results (impossible query)
+    Command: search_listings('designer ballgown', size='XXS', max_price=5)
+    Returns : []   (empty list, NO exception)
+    Agent   : No listings matched 'designer ballgown' size XXS under $5. Try raising your max price, dropping the size filter, using broader keywords.
+
+[2] suggest_outfit → empty wardrobe (new user)
+    Returns general styling advice (no exception):
+    I'm so excited for you to consider this adorable Y2K Baby Tee. This top pairs perfectly with flowy, feminine bottoms like skirts or wide-leg pants in neutral colors like beige, den...
+
+[3] create_fit_card → empty outfit string
+    Command: create_fit_card('', <listing>)
+    Returns : "Couldn't generate a fit card because no outfit suggestion was available."
+
+======================================================================
+All three failures handled gracefully — no Python exceptions raised.
+======================================================================
