@@ -13,6 +13,7 @@ Tools:
 """
 
 import os
+import re
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -69,8 +70,37 @@ def search_listings(
 
     Before writing code, fill in the Tool 1 section of planning.md.
     """
-    # Replace this with your implementation
-    return []
+    listings = load_listings()
+
+    # Tokenize the description into lowercase keywords for overlap scoring.
+    keywords = [tok for tok in re.findall(r"[a-z0-9]+", description.lower()) if tok]
+
+    results = []
+    for item in listings:
+        # --- hard filters -------------------------------------------------
+        if max_price is not None and item["price"] > max_price:
+            continue
+        if size is not None and size.lower() not in item["size"].lower():
+            continue
+
+        # --- relevance scoring -------------------------------------------
+        # Build the searchable text from the fields a shopper describes.
+        haystack = " ".join([
+            item["title"],
+            item["description"],
+            item["category"],
+            " ".join(item["style_tags"]),
+        ]).lower()
+
+        score = sum(1 for kw in keywords if kw in haystack)
+        if score == 0:
+            continue  # no keyword overlap — not relevant
+
+        results.append((score, item))
+
+    # Highest score first; ties keep dataset order (Python sort is stable).
+    results.sort(key=lambda pair: pair[0], reverse=True)
+    return [item for _score, item in results]
 
 
 # ── Tool 2: suggest_outfit ────────────────────────────────────────────────────
@@ -100,8 +130,64 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
 
     Before writing code, fill in the Tool 2 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    item_desc = (
+        f"{new_item['title']} "
+        f"(category: {new_item['category']}, "
+        f"colors: {', '.join(new_item['colors'])}, "
+        f"style: {', '.join(new_item['style_tags'])})"
+    )
+
+    items = wardrobe.get("items", [])
+    if not items:
+        # Empty wardrobe (new user): give general styling advice, never crash.
+        prompt = (
+            f"A shopper is considering buying this secondhand item:\n"
+            f"{item_desc}\n\n"
+            "They have not entered any wardrobe yet. Suggest how to style this "
+            "piece in general: what categories, colors, and silhouettes pair "
+            "well with it, and what overall vibe it suits. Give 1-2 concrete "
+            "outfit ideas in 3-4 sentences. Be encouraging and specific."
+        )
+    else:
+        wardrobe_lines = "\n".join(
+            f"- {it['name']} ({it['category']}; "
+            f"colors: {', '.join(it['colors'])}; "
+            f"style: {', '.join(it['style_tags'])})"
+            + (f"; note: {it['notes']}" if it.get("notes") else "")
+            for it in items
+        )
+        prompt = (
+            f"A shopper is considering buying this secondhand item:\n"
+            f"{item_desc}\n\n"
+            f"Here is their existing wardrobe:\n{wardrobe_lines}\n\n"
+            "Suggest 1-2 complete outfits that pair the new item with specific "
+            "pieces from their wardrobe. Refer to wardrobe pieces by name. "
+            "Include concrete styling moves (tuck, cuff, layer, etc.). "
+            "Keep it to 3-4 sentences, casual and encouraging."
+        )
+
+    try:
+        client = _get_groq_client()
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are FitFindr, a friendly secondhand-fashion "
+                    "stylist who gives specific, wearable outfit advice.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.7,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as exc:
+        # A styling miss should not abort an otherwise-good find.
+        return (
+            f"Couldn't generate a styling suggestion right now ({exc}). "
+            f"As a starting point, {new_item['title']} works well with simple, "
+            "complementary basics in neutral tones."
+        )
 
 
 # ── Tool 3: create_fit_card ───────────────────────────────────────────────────
@@ -133,5 +219,37 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
 
     Before writing code, fill in the Tool 3 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    # Guard: no outfit to caption — return a message, do not crash.
+    if not outfit or not outfit.strip():
+        return "Couldn't generate a fit card because no outfit suggestion was available."
+
+    price = new_item.get("price")
+    price_str = f"${price:.0f}" if isinstance(price, (int, float)) else "a steal"
+    prompt = (
+        "Write a short, casual outfit caption for a social post (Instagram/TikTok "
+        "OOTD style). It should:\n"
+        "- be 2-4 sentences, sound like a real person, NOT a product description\n"
+        f"- mention the item name (\"{new_item['title']}\"), its price "
+        f"({price_str}), and the platform ({new_item['platform']}) naturally, once each\n"
+        "- capture the outfit vibe in specific terms\n\n"
+        f"The item: {new_item['title']}\n"
+        f"The styled outfit: {outfit}"
+    )
+
+    try:
+        client = _get_groq_client()
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You write punchy, authentic thrift-haul captions "
+                    "with a bit of personality and the occasional emoji.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=1.0,  # high temp so repeat calls vary
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as exc:
+        return f"Couldn't generate a fit card right now ({exc})."
